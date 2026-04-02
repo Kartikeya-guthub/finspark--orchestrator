@@ -1,0 +1,43 @@
+{
+  "test_case_1_partial_brd": {
+    "tenant_id": "firstcapital-bank",
+    "document_name": "FirstCapital_BRD_Personal_Loan_v1.2",
+    "content": "FIRSTCAPITAL BANK — PERSONAL LOAN PRODUCT\nIntegration Requirements v1.2\n\n1. APPLICANT VERIFICATION\nAll loan applicants must be verified using Aadhaar-based eKYC before proceeding to any other step. KYC is mandatory for all loan types.\nApplicant fields available: applicant_name, applicant_dob, applicant_phone, applicant_aadhaar_ref (masked), consent_token\n\n2. CREDIT ASSESSMENT\nFetch CIBIL bureau report for all applicants. Bureau fetch should only happen after KYC is successfully completed.\nLoan amounts above Rs 5,00,000 require Experian report additionally.\n\n3. FRAUD SCREENING\n[SECTION INTENTIONALLY LEFT BLANK - TO BE UPDATED]\n\n4. PAYMENT DISBURSEMENT\nUse Razorpay for all loan disbursements via NEFT/IMPS.\nDisbursement should only happen after credit assessment is complete and loan is approved by underwriter.",
+    "expected_requirements": 4,
+    "expected_missing": 1,
+    "expected_ambiguous": ["Section 3 FRAUD SCREENING is blank"],
+    "expected_high_confidence": ["kyc", "bureau_cibil", "payment"],
+    "expected_conditions": {
+      "experian": "conditional",
+      "bureau_cibil": "prerequisite_kyc"
+    }
+  },
+  "test_case_2_amendment_brd": {
+    "tenant_id": "growthfinance",
+    "document_v1_name": "GrowthFinance_BRD_v1_Initial",
+    "document_v1_content": "GROWTHFINANCE — PERSONAL LOAN PRODUCT\nInitial Integration Requirements\n\nKYC VERIFICATION\nAll applicants verified via Aadhaar eKYC. Mandatory.\n\nCREDIT ASSESSMENT\nCIBIL v3.0 bureau fetch required after KYC completion.\n\nFRAUD SCREENING\nFraud screening recommended for loans above Rs 2,00,000 (optional).\n\nPAYMENT DISBURSEMENT\nRazorpay payment gateway for all disbursements.\nDisbursement after final approval.",
+    "document_v2_name": "GrowthFinance_BRD_v2_Amendment_47",
+    "document_v2_content": "GROWTHFINANCE — AMENDED INTEGRATION REQUIREMENTS\nAmendment Notice — Integration Change Request #47\nEffective Immediately\n\nCHANGE 1: FRAUD SCREENING NOW MANDATORY\nFraudShield v2.0 integration is now MANDATORY for all loan applications.\nPrevious: Optional for loans above Rs 2L\nNow: Mandatory for ALL applications regardless of amount\nTrigger: Regulatory requirement\n\nCHANGE 2: NEW GST REQUIREMENT\nGST verification required for all business loan applicants.\nProvider: GSTN official API\nMandatory: Yes, for applicant_type == 'business'\nField available: applicant_gstin\nMust run in parallel with bureau fetch, not sequentially.\n\nCHANGE 3-5: KYC, Bureau, Payment UNCHANGED",
+    "expected_changes": {
+      "modified": ["fraud"],
+      "added": ["gst"],
+      "unchanged": ["kyc", "bureau", "payment"]
+    },
+    "expected_dag_shape": "kyc -> [bureau|gst] parallel -> fraud -> payment"
+  },
+  "test_case_3_regulatory_brd": {
+    "tenant_id": "regionalcredit-nbfc",
+    "document_name": "RegionalCredit_RBI_DLG_Integration_v1",
+    "content": "REGIONALCREDIT NBFC\nDigital Lending Integration Requirements\nCompliance Reference: RBI Digital Lending Guidelines 2023, Clause 7.4\n\nSECTION A: DATA LOCALIZATION AND CONSENT\nPer RBI DLG 2023 Clause 7.4, all borrower data obtained through third-party integrations must have explicit digital consent recorded prior to data fetch. Consent must be AA-framework compliant where applicable. Integration with the Account Aggregator ecosystem is preferred for financial data but not exclusive.\n\nSECTION B: CREDIT DECISIONING\nThe platform shall integrate with at least one RBI-recognized credit information company. CIBIL TransUnion is preferred but Equifax or Experian may be used as fallback. Bureau pull must not happen more than once per application. Hard inquiry rules apply per CIC regulations.\n\nIn case of thin-file applicants (bureau score unavailable or below threshold), alternative data sources including GST returns and bank statement analysis via AA shall be used for credit assessment. Thin-file threshold: score less than 600 or no bureau history.\n\nSECTION C: IDENTITY VERIFICATION  \nKYC must comply with the Prevention of Money Laundering Act (PMLA) and RBI KYC Master Directions 2016. Full KYC is required. Video KYC is acceptable as per RBI circular RBI/2019-20/170.\nAadhaar OTP-based KYC is acceptable for amounts up to Rs 50,000 only.\nFor amounts above Rs 50,000, Video KYC or full Aadhaar biometric required.\n\nSECTION D: FRAUD AND RISK\nImplement fraud controls as per internal risk policy. (See Risk Policy Document v3.2 — not attached)\nReal-time fraud scoring is recommended.\n\nSECTION E: CONTRADICTING CLAUSE\nSection B states bureau pull must not happen more than once.\nSection D references real-time fraud scoring which in some implementations uses soft bureau pulls. This conflict to be resolved by Risk team.\nNote: FraudShield v1.5 integration is preferred by compliance team.\n(Note: FraudShield v1.5 does not exist in adapter catalog)",
+    "expected_contradictions": ["bureau_once_vs_fraud_soft_pull"],
+    "expected_ambiguities": [
+      "bureau_fallback_chain",
+      "kyc_amount_conditional",
+      "thin_file_runtime_conditional",
+      "missing_risk_policy",
+      "nonexistent_fraudshield_version"
+    ],
+    "expected_blocked_sections": ["fraud"],
+    "max_extraction_confidence": 0.75
+  }
+}

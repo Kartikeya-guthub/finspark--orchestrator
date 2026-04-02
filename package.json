@@ -14,6 +14,7 @@
     "migrate": "node scripts/migrate.mjs",
     "seed": "node scripts/seed.mjs",
     "migrate:fresh": "node scripts/migrate.mjs && node scripts/seed.mjs",
+    "demo:seed": "node scripts/seed.mjs && node scripts/demo-seed.mjs",
     "test": "node scripts/test-plain.mjs",
     "dev:api": "npm --workspace @finspark/api run dev",
     "dev:ai": "uvicorn app.main:app --app-dir apps/ai-service --host 0.0.0.0 --port 8002 --reload",

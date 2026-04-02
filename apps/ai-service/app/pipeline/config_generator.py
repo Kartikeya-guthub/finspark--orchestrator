@@ -287,6 +287,7 @@ def generate_config(
         match_results.append(
             {
                 "requirement_id": requirement.get("requirement_id"),
+                "source_sentence": requirement.get("source_sentence"),
                 "selected_adapter_id": selected_adapter.get("id"),
                 "selected_version_id": selected_adapter.get("selected_version_id"),
                 "match_confidence": selected_adapter.get("match_confidence"),
