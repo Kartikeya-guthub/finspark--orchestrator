@@ -1,0 +1,24 @@
+{
+  "name": "finspark-orchestrator",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Phase-locked monorepo for Finspark Orchestrator",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "migrate": "node scripts/migrate.mjs",
+    "seed": "node scripts/seed.mjs",
+    "health:api": "npm --workspace @finspark/api run dev",
+    "health:web": "npm --workspace @finspark/web run health",
+    "health:simulator": "npm --workspace @finspark/simulator run dev",
+    "health:ai": "uvicorn app.main:app --app-dir apps/ai-service --host 0.0.0.0 --port 8002"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}
