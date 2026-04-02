@@ -39,6 +39,10 @@ coverage/
 # Local scratch docs
 tmp-*.txt
 
+# README files outside the repo root
+**/README.md
+!/README.md
+
 # Generated test and probe artifacts
 ai-test-log.txt
 test-results*.txt
