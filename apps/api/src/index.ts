@@ -4,7 +4,9 @@ import path from "node:path";
 import multipart from "@fastify/multipart";
 import Fastify from "fastify";
 import { pool, closePool } from "./db.js";
-import { closeQueue, enqueueDocumentParseJob } from "./queue.js";
+import { closeQueue, documentParseQueueName, enqueueDocumentParseJob } from "./queue.js";
+import { Worker } from "bullmq";
+import { Redis } from "ioredis";
 import { SecretsService } from "./secrets.js";
 import { putDocumentObject } from "./storage.js";
 import {
@@ -20,6 +22,39 @@ const port = Number(process.env.API_PORT ?? 8000);
 const secretsService = new SecretsService(
   process.env.SECRET_ENCRYPTION_KEY ?? "change-me-in-dev",
 );
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://127.0.0.1:8002";
+const API_DOCUMENT_WORKER_ENABLED =
+  (process.env.API_DOCUMENT_WORKER_ENABLED ?? "false").toLowerCase() === "true";
+
+// ── BullMQ Worker: consume document-parse jobs by calling the AI service ────
+let _workerRedis: Redis | undefined;
+let _documentWorker: Worker | undefined;
+if (API_DOCUMENT_WORKER_ENABLED) {
+  _workerRedis = new Redis(process.env.REDIS_URL ?? "redis://127.0.0.1:6379", {
+    maxRetriesPerRequest: null,
+  });
+  _documentWorker = new Worker(
+    documentParseQueueName,
+    async (job) => {
+      const res = await fetch(`${AI_SERVICE_URL}/process-document`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(job.data),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "unknown");
+        throw new Error(`AI service returned ${res.status}: ${detail.slice(0, 200)}`);
+      }
+    },
+    { connection: _workerRedis },
+  );
+  _documentWorker.on("failed", (job, err) => {
+    app.log.error({ jobId: job?.id, err: err.message }, "document-parse job failed");
+  });
+  _documentWorker.on("completed", (job) => {
+    app.log.info({ jobId: job.id }, "document-parse job completed");
+  });
+}
 
 app.register(multipart, {
   limits: {
@@ -416,10 +451,103 @@ app.get("/api/secrets/resolve", async (request, reply) => {
   }
 });
 
+// ── Document pipeline status (lightweight poll) ───────────────────────────
+app.get<{ Params: { documentId: string } }>(
+  "/api/documents/:documentId/status",
+  async (request, reply) => {
+    const tenant = requireTenant(request);
+    const result = await pool.query<{ id: string; tenant_id: string; parse_status: string; updated_at: string }>(
+      `
+        SELECT id, tenant_id, parse_status, updated_at
+        FROM documents
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [request.params.documentId],
+    );
+
+    if (!result.rowCount) {
+      return reply.code(404).send({ error: "document_not_found" });
+    }
+    if (result.rows[0].tenant_id !== tenant.id) {
+      return reply.code(403).send({ error: "cross_tenant_forbidden" });
+    }
+
+    const { id, parse_status, updated_at } = result.rows[0];
+    return reply.send({ document_id: id, parse_status, updated_at });
+  },
+);
+
+// ── Requirements listing ──────────────────────────────────────────────────
+app.get("/api/requirements", async (request, reply) => {
+  const tenant = requireTenant(request);
+  const { document_id } = request.query as { document_id?: string };
+
+  const result = await pool.query(
+    `
+      SELECT
+        r.id, r.document_id, r.service_type, r.mandatory, r.confidence,
+        r.source_sentence, r.status, r.requirement_id, r.provider_hint,
+        r.fields_needed, r.conditions, r.api_action, r.notes,
+        r.extraction_attempt, r.created_at
+      FROM requirements r
+      WHERE r.tenant_id = $1
+        ${document_id ? "AND r.document_id = $2" : ""}
+      ORDER BY r.created_at DESC
+      LIMIT 200
+    `,
+    document_id ? [tenant.id, document_id] : [tenant.id],
+  );
+
+  return reply.send({ items: result.rows, count: result.rowCount });
+});
+
+// ── Requirements for a specific document ─────────────────────────────────
+app.get<{ Params: { documentId: string } }>(
+  "/api/documents/:documentId/requirements",
+  async (request, reply) => {
+    const tenant = requireTenant(request);
+
+    // Verify document ownership first
+    const docCheck = await pool.query<{ tenant_id: string }>(
+      "SELECT tenant_id FROM documents WHERE id = $1 LIMIT 1",
+      [request.params.documentId],
+    );
+    if (!docCheck.rowCount) {
+      return reply.code(404).send({ error: "document_not_found" });
+    }
+    if (docCheck.rows[0].tenant_id !== tenant.id) {
+      return reply.code(403).send({ error: "cross_tenant_forbidden" });
+    }
+
+    const result = await pool.query(
+      `
+        SELECT
+          id, service_type, mandatory, confidence, source_sentence, status,
+          requirement_id, provider_hint, fields_needed, conditions,
+          api_action, notes, created_at
+        FROM requirements
+        WHERE document_id = $1 AND tenant_id = $2
+        ORDER BY mandatory DESC, confidence DESC
+      `,
+      [request.params.documentId, tenant.id],
+    );
+
+    return reply.send({ document_id: request.params.documentId, items: result.rows, count: result.rowCount });
+  },
+);
+
 app.addHook("onClose", async () => {
+  if (_documentWorker) {
+    await _documentWorker.close();
+  }
+  if (_workerRedis) {
+    await _workerRedis.quit();
+  }
   await closeQueue();
   await closePool();
 });
+
 
 app
   .listen({ port, host: "0.0.0.0" })

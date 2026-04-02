@@ -38,3 +38,12 @@ coverage/
 
 # Local scratch docs
 tmp-*.txt
+
+# Generated test and probe artifacts
+ai-test-log.txt
+test-results*.txt
+scripts/*-out.txt
+scripts/*probe*.txt
+scripts/docs.txt
+scripts/results*.txt
+scripts/docrows.json

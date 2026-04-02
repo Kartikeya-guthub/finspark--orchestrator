@@ -13,9 +13,9 @@ ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO requirements (id, document_id, tenant_id, service_type, mandatory, confidence, source_sentence, status)
 VALUES
-  ('ddddeeee-0001-0000-0000-000000000001', 'aaaa1111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'bureau_pull', true, 0.9400, 'All personal loan applications above INR 50,000 must include bureau pull from at least one approved bureau adapter.', 'active'),
-  ('ddddeeee-0002-0000-0000-000000000002', 'bbbb2222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111', 'fraud_screening', true, 0.9100, 'Fraud screening must execute before final underwriting decision for every new-to-credit customer.', 'active'),
-  ('ddddeeee-0003-0000-0000-000000000003', 'cccc3333-3333-3333-3333-333333333333', '22222222-2222-2222-2222-222222222222', 'payment_collection', false, 0.8800, 'Payment retries should follow exponential backoff and route to a secondary gateway on primary failure.', 'active')
+  ('ddddeeee-0001-0000-0000-000000000001', 'aaaa1111-1111-1111-1111-111111111111', '11111111-1111-1111-1111-111111111111', 'bureau', true, 0.9400, 'All personal loan applications above INR 50,000 must include bureau pull from at least one approved bureau adapter.', 'active'),
+  ('ddddeeee-0002-0000-0000-000000000002', 'bbbb2222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111', 'fraud', true, 0.9100, 'Fraud screening must execute before final underwriting decision for every new-to-credit customer.', 'active'),
+  ('ddddeeee-0003-0000-0000-000000000003', 'cccc3333-3333-3333-3333-333333333333', '22222222-2222-2222-2222-222222222222', 'payment', false, 0.8800, 'Payment retries should follow exponential backoff and route to a secondary gateway on primary failure.', 'active')
 ON CONFLICT (id) DO NOTHING;
 
 WITH adapter_rows(name, category, provider, description, capability_tags, auth_type) AS (

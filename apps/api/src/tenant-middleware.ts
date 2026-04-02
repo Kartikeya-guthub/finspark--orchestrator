@@ -17,7 +17,10 @@ export async function tenantMiddleware(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<void> {
-  if (request.url === "/health" || request.url === "/api/tenants/bootstrap") {
+  const PUBLIC_PATHS = ["/health", "/api/tenants/bootstrap"];
+  const isPublic = PUBLIC_PATHS.includes(request.url) ||
+    request.url.startsWith("/api/adapters");
+  if (isPublic) {
     return;
   }
 

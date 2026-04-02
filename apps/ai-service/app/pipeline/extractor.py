@@ -48,7 +48,7 @@ Return ONLY valid JSON matching this exact schema. No preamble, no markdown:
       "service_type": "bureau | kyc | gst | payment | fraud | open_banking",
       "provider_hint": "string or null",
       "mandatory": true,
-      "confidence": 0.0,
+      "confidence": 0.85,
       "source_sentence": "exact sentence from document that indicates this",
       "fields_needed": ["field1", "field2"],
       "conditions": [
@@ -62,7 +62,7 @@ Return ONLY valid JSON matching this exact schema. No preamble, no markdown:
       "notes": "any ambiguity or additional context"
     }
   ],
-  "extraction_confidence": 0.0,
+  "extraction_confidence": 0.80,
   "ambiguous_requirements": ["sentences that were unclear"],
   "missing_information": ["what additional info would improve extraction"]
 }

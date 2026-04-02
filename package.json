@@ -13,6 +13,10 @@
   "scripts": {
     "migrate": "node scripts/migrate.mjs",
     "seed": "node scripts/seed.mjs",
+    "migrate:fresh": "node scripts/migrate.mjs && node scripts/seed.mjs",
+    "test": "node scripts/test-plain.mjs",
+    "dev:api": "npm --workspace @finspark/api run dev",
+    "dev:ai": "uvicorn app.main:app --app-dir apps/ai-service --host 0.0.0.0 --port 8002 --reload",
     "health:api": "npm --workspace @finspark/api run dev",
     "health:web": "npm --workspace @finspark/web run health",
     "health:simulator": "npm --workspace @finspark/simulator run dev",

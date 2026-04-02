@@ -400,7 +400,7 @@ def generate_config(
                 INSERT INTO dag_nodes
                   (id, tenant_config_id, tenant_id, adapter_version_id, node_type, condition, retry_policy, timeout_ms)
                 VALUES
-                  (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+                  (%s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s)
                 """,
                 (
                     node["id"],
