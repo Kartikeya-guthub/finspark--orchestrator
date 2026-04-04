@@ -102,7 +102,8 @@ async def full_extraction_pipeline(document_id: str, tenant_id: str) -> dict[str
                                 "matched_adapter_version_id": best_match.get("selected_version_id"),
                                 "match_confidence": best_match.get("match_confidence"),
                                 "match_explanation": best_match.get("match_explanation"),
-                            }
+                            },
+                            default=str,
                         ),
                         document_id,
                         tenant_id,
@@ -170,7 +171,8 @@ async def full_extraction_pipeline(document_id: str, tenant_id: str) -> dict[str
                             "extraction_confidence": extraction.extraction_confidence,
                             "used_stub_fallback": _is_stub_fallback(extraction),
                             "safety": safety_result,
-                        }
+                        },
+                        default=str,
                     ),
                 ),
             )

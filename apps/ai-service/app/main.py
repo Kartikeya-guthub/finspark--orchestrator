@@ -174,97 +174,98 @@ async def process_document(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         with connect(db_url(), row_factory=dict_row) as conn:
             with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO document_texts (document_id, tenant_id, original_text, redacted_text, pii_entities)
-                VALUES (%s, %s, %s, %s, %s::jsonb)
-                ON CONFLICT (document_id)
-                DO UPDATE SET
-                  original_text = EXCLUDED.original_text,
-                  redacted_text = EXCLUDED.redacted_text,
-                  pii_entities = EXCLUDED.pii_entities,
-                  updated_at = now()
-                """,
-                (document_id, tenant_id, original_text, redacted_text, json.dumps(pii_entities)),
-            )
+                cur.execute(
+                    """
+                    INSERT INTO document_texts (document_id, tenant_id, original_text, redacted_text, pii_entities)
+                    VALUES (%s, %s, %s, %s, %s::jsonb)
+                    ON CONFLICT (document_id)
+                    DO UPDATE SET
+                      original_text = EXCLUDED.original_text,
+                      redacted_text = EXCLUDED.redacted_text,
+                      pii_entities = EXCLUDED.pii_entities,
+                      updated_at = now()
+                    """,
+                    (document_id, tenant_id, original_text, redacted_text, json.dumps(pii_entities)),
+                )
 
-            cur.execute(
-                """
-                UPDATE documents
-                SET parse_status = 'processing_requirements',
-                    structured_content = %s::jsonb
-                WHERE id = %s AND tenant_id = %s
-                """,
-                (json.dumps(structured_redacted), document_id, tenant_id),
-            )
-
-            cur.execute(
-                """
-                INSERT INTO audit_events (tenant_id, entity_type, entity_id, action, before, after, actor)
-                VALUES (%s, 'document', %s, 'pii_redaction', NULL, %s::jsonb, 'ai-service')
-                """,
-                (
-                    tenant_id,
-                    document_id,
-                    json.dumps({"entities_found": pii_entities}),
-                ),
-            )
-
-            cur.execute(
-                """
-                INSERT INTO audit_events (tenant_id, entity_type, entity_id, action, before, after, actor)
-                VALUES (%s, 'document', %s, 'structure_extraction', NULL, %s::jsonb, 'ai-service')
-                """,
-                (
-                    tenant_id,
-                    document_id,
-                    json.dumps(
-                        {
-                            "source": structured.get("source", "unknown"),
-                            "sections": len(structured_redacted.get("sections", []))
-                            if isinstance(structured_redacted, dict)
-                            else 0,
-                            "tables": len(structured_redacted.get("tables", []))
-                            if isinstance(structured_redacted, dict)
-                            else 0,
-                            "headers": len(structured_redacted.get("headers", []))
-                            if isinstance(structured_redacted, dict)
-                            else 0,
-                            "entities_found": [],
-                        }
-                    ),
-                ),
-            )
-
-            cur.execute(
-                """
-                INSERT INTO audit_events (tenant_id, entity_type, entity_id, action, before, after, actor)
-                VALUES (%s, 'document', %s, 'pii_redaction_structured', NULL, %s::jsonb, 'ai-service')
-                """,
-                (
-                    tenant_id,
-                    document_id,
-                    json.dumps(
-                        {
-                            "entities_summary": structured_pii_entities,
-                            "chunk_count": chunk_count,
-                        }
-                    ),
-                ),
-            )
-
-            use_full_pipeline = (os.getenv("AI_USE_FULL_PIPELINE", "true").lower() == "true")
-            if use_full_pipeline:
                 cur.execute(
                     """
                     UPDATE documents
-                    SET parse_status = 'structure_extracted'
+                    SET parse_status = 'processing_requirements',
+                        structured_content = %s::jsonb
                     WHERE id = %s AND tenant_id = %s
                     """,
-                    (document_id, tenant_id),
+                    (json.dumps(structured_redacted), document_id, tenant_id),
                 )
-                conn.commit()
 
+                cur.execute(
+                    """
+                    INSERT INTO audit_events (tenant_id, entity_type, entity_id, action, before, after, actor)
+                    VALUES (%s, 'document', %s, 'pii_redaction', NULL, %s::jsonb, 'ai-service')
+                    """,
+                    (
+                        tenant_id,
+                        document_id,
+                        json.dumps({"entities_found": pii_entities}),
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT INTO audit_events (tenant_id, entity_type, entity_id, action, before, after, actor)
+                    VALUES (%s, 'document', %s, 'structure_extraction', NULL, %s::jsonb, 'ai-service')
+                    """,
+                    (
+                        tenant_id,
+                        document_id,
+                        json.dumps(
+                            {
+                                "source": structured.get("source", "unknown"),
+                                "sections": len(structured_redacted.get("sections", []))
+                                if isinstance(structured_redacted, dict)
+                                else 0,
+                                "tables": len(structured_redacted.get("tables", []))
+                                if isinstance(structured_redacted, dict)
+                                else 0,
+                                "headers": len(structured_redacted.get("headers", []))
+                                if isinstance(structured_redacted, dict)
+                                else 0,
+                                "entities_found": [],
+                            }
+                        ),
+                    ),
+                )
+
+                cur.execute(
+                    """
+                    INSERT INTO audit_events (tenant_id, entity_type, entity_id, action, before, after, actor)
+                    VALUES (%s, 'document', %s, 'pii_redaction_structured', NULL, %s::jsonb, 'ai-service')
+                    """,
+                    (
+                        tenant_id,
+                        document_id,
+                        json.dumps(
+                            {
+                                "entities_summary": structured_pii_entities,
+                                "chunk_count": chunk_count,
+                            }
+                        ),
+                    ),
+                )
+
+                use_full_pipeline = (os.getenv("AI_USE_FULL_PIPELINE", "true").lower() == "true")
+                if use_full_pipeline:
+                    cur.execute(
+                        """
+                        UPDATE documents
+                        SET parse_status = 'structure_extracted'
+                        WHERE id = %s AND tenant_id = %s
+                        """,
+                        (document_id, tenant_id),
+                    )
+                    conn.commit()
+
+            if use_full_pipeline:
                 full_result = await full_extraction_pipeline(
                     document_id=str(document_id),
                     tenant_id=str(tenant_id),

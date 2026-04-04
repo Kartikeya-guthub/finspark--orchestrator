@@ -226,6 +226,30 @@ def _deterministic_mappings(
 
 def _build_edges_from_conditions(requirements: list[dict[str, Any]], node_ids_by_requirement_id: dict[str, str]) -> list[dict[str, Any]]:
     edges: list[dict[str, Any]] = []
+
+    req_id_by_service: dict[str, str] = {}
+    for requirement in requirements:
+        requirement_id = str(requirement.get("requirement_id"))
+        service_type = str(requirement.get("service_type", "")).strip().lower()
+        if requirement_id and service_type and service_type not in req_id_by_service:
+            req_id_by_service[service_type] = requirement_id
+
+    def add_edge(from_node_id: str, to_node_id: str, condition_type: str) -> None:
+        if not from_node_id or not to_node_id or from_node_id == to_node_id:
+            return
+        if any(edge["from_node_id"] == from_node_id and edge["to_node_id"] == to_node_id for edge in edges):
+            return
+        edge_type = "parallel" if condition_type == "parallel" else "success"
+        edges.append(
+            {
+                "id": str(uuid.uuid4()),
+                "from_node_id": from_node_id,
+                "to_node_id": to_node_id,
+                "condition_type": condition_type,
+                "edge_type": edge_type,
+            }
+        )
+
     for requirement in requirements:
         requirement_id = str(requirement.get("requirement_id"))
         current_node_id = node_ids_by_requirement_id.get(requirement_id)
@@ -235,22 +259,52 @@ def _build_edges_from_conditions(requirements: list[dict[str, Any]], node_ids_by
             depends_on = condition.get("depends_on")
             if not depends_on:
                 continue
-            from_node_id = node_ids_by_requirement_id.get(str(depends_on))
+            dependency_ref = str(depends_on).strip()
+            from_node_id = node_ids_by_requirement_id.get(dependency_ref)
+            if not from_node_id:
+                # Some extractors output service names instead of requirement_ids.
+                dependency_requirement_id = req_id_by_service.get(dependency_ref.lower())
+                if dependency_requirement_id:
+                    from_node_id = node_ids_by_requirement_id.get(dependency_requirement_id)
             if not from_node_id:
                 continue
-            if from_node_id == current_node_id:
-                continue
             condition_type = str(condition.get("condition_type", "prerequisite"))
-            edge_type = "parallel" if condition_type == "parallel" else "success"
-            edges.append(
-                {
-                    "id": str(uuid.uuid4()),
-                    "from_node_id": from_node_id,
-                    "to_node_id": current_node_id,
-                    "condition_type": condition_type,
-                    "edge_type": edge_type,
-                }
+            add_edge(from_node_id, current_node_id, condition_type)
+
+    # Fallback chain for common lending flow if extractor returned no explicit dependencies.
+    if not edges:
+        flow_dependencies = {
+            "bureau": "kyc",
+            "fraud": "bureau",
+            "payment": "fraud",
+        }
+        for service_type, dependency_service in flow_dependencies.items():
+            to_req_id = req_id_by_service.get(service_type)
+            from_req_id = req_id_by_service.get(dependency_service)
+            if not to_req_id or not from_req_id:
+                continue
+            add_edge(
+                node_ids_by_requirement_id.get(from_req_id, ""),
+                node_ids_by_requirement_id.get(to_req_id, ""),
+                "prerequisite",
             )
+
+    # Final fallback: preserve a deterministic dependency chain by execution order.
+    if not edges and len(requirements) > 1:
+        ordered_req_ids = [
+            str(requirement.get("requirement_id"))
+            for requirement in requirements
+            if str(requirement.get("requirement_id")) in node_ids_by_requirement_id
+        ]
+        for index in range(1, len(ordered_req_ids)):
+            from_req_id = ordered_req_ids[index - 1]
+            to_req_id = ordered_req_ids[index]
+            add_edge(
+                node_ids_by_requirement_id.get(from_req_id, ""),
+                node_ids_by_requirement_id.get(to_req_id, ""),
+                "prerequisite",
+            )
+
     return edges
 
 

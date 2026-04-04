@@ -107,7 +107,8 @@ def _call_gliner_pii(chunk: str) -> tuple[str, list[dict[str, Any]]]:
     api_key = os.getenv("NVIDIA_GLINER_API_KEY") or os.getenv("NVIDIA_API_KEY", "")
     api_key = api_key.strip()
     if not api_key:
-        raise RuntimeError("NVIDIA_API_KEY is required for structured PII redaction")
+        # Fall back to deterministic regex redaction when NVIDIA credentials are unavailable.
+        return redact_text_regex(chunk)
 
     endpoint = os.getenv("NVIDIA_CHAT_ENDPOINT", "https://integrate.api.nvidia.com/v1/chat/completions")
     payload = {

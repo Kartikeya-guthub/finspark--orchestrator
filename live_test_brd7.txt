@@ -1,0 +1,4 @@
+KYC verification required. demo_run=20260404222415
+Then bureau check.
+Then fraud screening.
+Then payment disbursal.

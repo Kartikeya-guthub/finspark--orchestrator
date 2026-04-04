@@ -1,0 +1,4 @@
+KYC verification required first.
+Bureau check requires successful KYC.
+Fraud screening requires successful bureau check.
+Payment disbursal requires successful fraud screening.

@@ -13,7 +13,7 @@ const dbPool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
-type SimulationMode = "schema_validation" | "dry_run" | "mock";
+type SimulationMode = "schema" | "dryrun" | "mock";
 type Scenario = "success" | "partial_failure" | "timeout" | "schema_mismatch";
 
 class SimulationEngine {
@@ -104,8 +104,8 @@ class SimulationEngine {
       });
     }
 
-    const runId = await this.saveSimulationRun(config, "schema_validation", "completed", results, triggeredBy);
-    return { run_id: runId, mode: "schema_validation", results };
+    const runId = await this.saveSimulationRun(config, "schema", "completed", results, triggeredBy);
+    return { run_id: runId, mode: "schema", results };
   }
 
   async dryRun(configVersionId: string, testPayload: Record<string, unknown>, triggeredBy = "simulator") {
@@ -148,8 +148,8 @@ class SimulationEngine {
       }
     }
 
-    const runId = await this.saveSimulationRun(config, "dry_run", "completed", trace, triggeredBy);
-    return { run_id: runId, mode: "dry_run", results: trace };
+    const runId = await this.saveSimulationRun(config, "dryrun", "completed", trace, triggeredBy);
+    return { run_id: runId, mode: "dryrun", results: trace };
   }
 
   async generateMockResponse(responseSchema: any, scenario: Scenario) {

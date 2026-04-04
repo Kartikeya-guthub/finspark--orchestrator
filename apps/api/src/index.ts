@@ -354,7 +354,7 @@ app.get<{ Params: { tenantId: string } }>(
           tcv.created_at,
           tcv.generator_model,
           tcv.source_document_id,
-          COALESCE(json_array_length(tcv.match_results), 0) AS match_count,
+          COALESCE(jsonb_array_length(tcv.match_results), 0) AS match_count,
           COALESCE(approval_stats.approved_count, 0) AS approved_count,
           COALESCE(approval_stats.rejected_count, 0) AS rejected_count
         FROM tenant_config_versions tcv

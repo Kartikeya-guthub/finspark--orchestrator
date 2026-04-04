@@ -67,6 +67,15 @@ Return ONLY valid JSON matching this exact schema. No preamble, no markdown:
   "missing_information": ["what additional info would improve extraction"]
 }
 
+IMPORTANT RULES FOR CONDITIONS:
+- depends_on MUST reference another requirement_id (example: req_001).
+- Do NOT use service names like "kyc" or "bureau" in depends_on.
+- Typical lending dependency chain:
+    - bureau depends on kyc
+    - fraud depends on bureau
+    - payment depends on fraud
+- Only the first prerequisite in the chain should use an empty conditions array.
+
 Document:
 __DOCUMENT_TEXT__
 """
@@ -162,8 +171,8 @@ def stub_extractor(text: str, document_id: str, tenant_id: str) -> RequirementEx
         ("bureau", ["cibil", "bureau", "equifax", "experian", "credit"]),
         ("kyc", ["kyc", "aadhaar", "pan", "identity", "verification"]),
         ("gst", ["gst", "gstr", "tax"]),
-        ("payment", ["payment", "gateway", "razorpay", "stripe"]),
-        ("fraud", ["fraud", "risk", "device", "threat"]),
+        ("payment", ["payment", "gateway", "razorpay", "stripe", "disbursal"]),
+        ("fraud", ["fraud", "risk", "device", "threat", "screening"]),
         ("open_banking", ["account aggregator", "aa", "open banking", "consent"]),
     ]
 
@@ -173,11 +182,16 @@ def stub_extractor(text: str, document_id: str, tenant_id: str) -> RequirementEx
         if not any(keyword in lowered for _, keywords in service_map for keyword in keywords):
             continue
 
-        service_type = "bureau"
+        # Pick service type by earliest keyword occurrence to avoid biased ordering.
+        best_match: tuple[int, str] | None = None
         for candidate_service, keywords in service_map:
-            if any(keyword in lowered for keyword in keywords):
-                service_type = candidate_service
-                break
+            for keyword in keywords:
+                pos = lowered.find(keyword)
+                if pos == -1:
+                    continue
+                if best_match is None or pos < best_match[0]:
+                    best_match = (pos, candidate_service)
+        service_type = best_match[1] if best_match else "bureau"
 
         mandatory = any(word in lowered for word in ["must", "shall", "required", "mandatory"])
         api_action = "fetch" if any(word in lowered for word in ["fetch", "pull", "get"]) else "verify"
@@ -207,6 +221,34 @@ def stub_extractor(text: str, document_id: str, tenant_id: str) -> RequirementEx
             )
         )
         requirement_counter += 1
+
+    # Ensure fallback extraction still models dependency intent for DAG generation.
+    if requirements:
+        first_req_by_service: dict[str, str] = {}
+        for req in requirements:
+            if req.service_type not in first_req_by_service:
+                first_req_by_service[req.service_type] = req.requirement_id
+
+        service_dependencies = {
+            "bureau": "kyc",
+            "fraud": "bureau",
+            "payment": "fraud",
+        }
+
+        for req in requirements:
+            dependency_service = service_dependencies.get(req.service_type)
+            if not dependency_service:
+                continue
+            depends_on_req_id = first_req_by_service.get(dependency_service)
+            if not depends_on_req_id or depends_on_req_id == req.requirement_id:
+                continue
+            req.conditions = [
+                RequirementCondition(
+                    depends_on=depends_on_req_id,
+                    condition_type="prerequisite",
+                    expression=f"{req.service_type} requires successful {dependency_service}",
+                )
+            ]
 
     return RequirementExtraction(
         requirements=requirements,
