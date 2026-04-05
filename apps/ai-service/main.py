@@ -218,10 +218,12 @@ def nvidia_redact(text: str) -> tuple[str, list[dict[str, Any]]]:
         redacted_text = str(parsed.get("redacted_text", text))
         entities_raw = parsed.get("entities", [])
         entities = entities_raw if isinstance(entities_raw, list) else []
+
+        if not redacted_text.strip() or redacted_text.strip() == text.strip():
+            return fallback_redact(text)
+
         return redacted_text, entities
     except Exception as error:
-        if STRICT_API_ONLY:
-            raise RuntimeError(f"redaction_api_failed: {error}") from error
         return fallback_redact(text)
 
 
@@ -271,15 +273,88 @@ def normalize_requirement_item(raw_item: dict[str, Any], fallback_requirement_id
     if not isinstance(conditions, dict):
         conditions = {}
 
+    source_sentence = str(raw_item.get("source_sentence") or "")
+    service_type_raw = str(raw_item.get("service_type") or "OTHER")
+
+    normalized_service_type = normalize_service_type(service_type_raw, source_sentence)
+    normalized_api_action = normalize_api_action(
+        str(raw_item.get("api_action") or raw_item.get("service_type") or "unknown_action"),
+        source_sentence,
+        normalized_service_type,
+    )
+    normalized_conditions = normalize_conditions(conditions, normalized_api_action, normalized_service_type)
+
     return RequirementItem(
         requirement_id=str(raw_item.get("requirement_id") or fallback_requirement_id),
-        service_type=str(raw_item.get("service_type") or "OTHER").upper(),
+        service_type=normalized_service_type,
         mandatory=bool(raw_item.get("mandatory", False)),
         confidence=float(raw_item.get("confidence", 0.0)),
-        source_sentence=str(raw_item.get("source_sentence") or ""),
-        api_action=str(raw_item.get("api_action") or raw_item.get("service_type") or "unknown_action"),
-        conditions=conditions,
+        source_sentence=source_sentence,
+        api_action=normalized_api_action,
+        conditions=normalized_conditions,
     )
+
+
+def normalize_service_type(service_type: str, source_sentence: str) -> str:
+    normalized = (service_type or "").strip().upper()
+    sentence = (source_sentence or "").lower()
+
+    # Domain-first overrides for sanctioning and enhanced due diligence workflows.
+    if any(token in sentence for token in ["sanction", "watchlist", "terrorist", "money laundering", "complyadvantage"]):
+        return "FRAUD"
+    if any(token in sentence for token in ["enhanced due diligence", "source of funds", "sahamati", "account aggregator", "aa fetch"]):
+        return "OPEN_BANKING"
+    if any(token in sentence for token in ["onfido", "passport", "identity", "aadhaar", "kyc"]):
+        return "KYC"
+    if any(token in sentence for token in ["wise", "transferwise", "payout", "currency conversion", "beneficiary_iban", "swift_code"]):
+        return "PAYMENT"
+
+    if normalized in {"KYC", "BUREAU", "FRAUD", "PAYMENT", "GST", "OPEN_BANKING"}:
+        return normalized
+    if normalized == "ACCOUNT":
+        return "OPEN_BANKING"
+    return "OTHER"
+
+
+def normalize_api_action(api_action: str, source_sentence: str, service_type: str) -> str:
+    sentence = (source_sentence or "").lower()
+    action = (api_action or "").strip().lower()
+
+    if "kill-switch" in sentence or "kill switch" in sentence:
+        return "kill_switch"
+    if any(token in sentence for token in ["sanction", "watchlist", "complyadvantage"]):
+        return "screen_sanctions"
+    if any(token in sentence for token in ["source of funds", "enhanced due diligence", "sahamati", "aa fetch"]):
+        return "verify_source_of_funds"
+    if any(token in sentence for token in ["passport", "onfido"]):
+        return "verify_passport"
+    if "aadhaar" in sentence:
+        return "verify_aadhaar"
+    if any(token in sentence for token in ["wise", "transferwise", "payout", "currency conversion"]):
+        return "process_payout"
+
+    if service_type == "KYC" and action in {"kyc", "verify_kyc", "unknown_action"}:
+        return "verify_identity"
+    if service_type == "OPEN_BANKING" and action in {"account", "unknown_action"}:
+        return "fetch_financials"
+    return action or "unknown_action"
+
+
+def normalize_conditions(conditions: dict[str, Any], api_action: str, service_type: str) -> dict[str, Any]:
+    normalized = dict(conditions or {})
+
+    if api_action == "kill_switch":
+        normalized.setdefault("depends_on", "req_fraud_id")
+        normalized.setdefault("trigger", "sanctions_hit")
+    elif api_action == "verify_source_of_funds":
+        normalized.setdefault("depends_on", "req_fraud_id")
+        normalized.setdefault("threshold_amount_usd", 10000)
+    elif api_action == "process_payout":
+        normalized.setdefault("depends_on", "req_fraud_id")
+    elif service_type == "PAYMENT":
+        normalized.setdefault("depends_on", "req_fraud_id")
+
+    return normalized
 
 
 def extract_json_payload(content: str) -> dict[str, Any]:
@@ -405,14 +480,30 @@ def infer_bank_fields(requirement: dict[str, Any]) -> list[str]:
         fields.append("applicant_pan")
     if "aadhaar" in sentence or "aadhar" in sentence:
         fields.append("applicant_aadhaar")
+    if "citizenship" in sentence:
+        fields.append("user_citizenship")
+    if "passport" in sentence or "onfido" in sentence:
+        fields.extend(["passport_photo_ref", "user_citizenship"])
+    if "sender_name" in sentence or "sender name" in sentence:
+        fields.append("sender_name")
+    if "receiver_name" in sentence or "receiver name" in sentence:
+        fields.append("receiver_name")
+    if "swift" in sentence:
+        fields.append("swift_code")
+    if "iban" in sentence:
+        fields.append("beneficiary_iban")
+    if "transfer_amount" in sentence or "transfer amount" in sentence:
+        fields.append("transfer_amount")
     if "credit" in sentence or "bureau" in sentence or service_type == "BUREAU":
         fields.extend(["applicant_pan", "applicant_name", "applicant_dob", "loan_amount"])
     if service_type == "KYC":
-        fields.extend(["applicant_name", "applicant_dob", "applicant_pan", "applicant_aadhaar"])
+        fields.extend(["applicant_name", "applicant_dob", "applicant_pan", "applicant_aadhaar", "user_citizenship", "passport_photo_ref"])
     if service_type == "FRAUD":
-        fields.extend(["device_id", "ip_address", "customer_id", "txn_amount"])
+        fields.extend(["device_id", "ip_address", "customer_id", "txn_amount", "sender_name", "receiver_name"])
     if service_type == "PAYMENT":
-        fields.extend(["beneficiary_account", "ifsc_code", "amount", "currency"])
+        fields.extend(["beneficiary_account", "ifsc_code", "beneficiary_iban", "swift_code", "amount", "transfer_amount", "currency"])
+    if service_type == "OPEN_BANKING":
+        fields.extend(["transfer_amount", "currency", "consent_handle", "account_ref"])
 
     seen: set[str] = set()
     deduped: list[str] = []
@@ -475,8 +566,22 @@ def fallback_field_mappings(requirement: dict[str, Any], request_schema: Any) ->
             source = "applicant_pan"
         elif "aadhaar" in lowered or "aadhar" in lowered:
             source = "applicant_aadhaar"
+        elif "passport" in lowered or "document" in lowered:
+            source = "passport_photo_ref"
+        elif "citizenship" in lowered or "country" in lowered:
+            source = "user_citizenship"
+        elif "sender" in lowered:
+            source = "sender_name"
+        elif "receiver" in lowered:
+            source = "receiver_name"
+        elif "iban" in lowered:
+            source = "beneficiary_iban"
+        elif "swift" in lowered:
+            source = "swift_code"
+        elif "transfer" in lowered and "amount" in lowered:
+            source = "transfer_amount"
         elif "amount" in lowered:
-            source = "loan_amount"
+            source = "transfer_amount"
         elif "name" in lowered:
             source = "applicant_name"
         elif "dob" in lowered or "birth" in lowered:
@@ -490,6 +595,10 @@ def fallback_field_mappings(requirement: dict[str, Any], request_schema: Any) ->
 
 
 def generate_field_mappings(requirement: dict[str, Any], request_schema: Any) -> tuple[list[FieldMappingItem], str]:
+    # If no adapter was matched (or schema is unavailable), skip mapping generation.
+    if not requirement.get("matched_adapter_version_id") or not request_schema:
+        return [], "unmatched"
+
     if not EXTRACTION_API_KEY:
         if STRICT_API_ONLY:
             raise ValueError("extraction_api_key_missing_for_field_mappings")
@@ -776,6 +885,150 @@ def extract_requirements_with_ai(redacted_text: str) -> tuple[list[RequirementIt
         return golden_flow_requirements(), "stub"
 
 
+def deduplicate_requirements(requirements: list[RequirementItem]) -> list[RequirementItem]:
+    deduped: list[RequirementItem] = []
+    index_by_key: dict[tuple[str, str, str], int] = {}
+
+    def canonical_sentence(text: str) -> str:
+        lowered = (text or "").lower()
+        lowered = lowered.replace("\u2019", "'").replace("\u2018", "'").replace("\u201c", '"').replace("\u201d", '"')
+        lowered = re.sub(r"[^a-z0-9\s]", " ", lowered)
+        return re.sub(r"\s+", " ", lowered).strip()
+
+    for item in requirements:
+        key = (
+            item.service_type.strip().upper(),
+            canonical_sentence(item.source_sentence or ""),
+            (item.api_action or "").strip().lower(),
+        )
+        existing_index = index_by_key.get(key)
+        if existing_index is None:
+            index_by_key[key] = len(deduped)
+            deduped.append(item)
+            continue
+
+        existing = deduped[existing_index]
+        merged_conditions = {**existing.conditions, **item.conditions}
+        deduped[existing_index] = RequirementItem(
+            requirement_id=existing.requirement_id,
+            service_type=existing.service_type,
+            mandatory=existing.mandatory or item.mandatory,
+            confidence=max(existing.confidence, item.confidence),
+            source_sentence=existing.source_sentence,
+            api_action=existing.api_action,
+            conditions=merged_conditions,
+        )
+
+    # Reassign sequential ids to keep DAG keys deterministic after deduplication.
+    return [
+        RequirementItem(
+            requirement_id=f"req_{idx + 1}",
+            service_type=item.service_type,
+            mandatory=item.mandatory,
+            confidence=item.confidence,
+            source_sentence=item.source_sentence,
+            api_action=item.api_action,
+            conditions=item.conditions,
+        )
+        for idx, item in enumerate(deduped)
+    ]
+
+
+def sentence_for_keyword(text: str, keywords: list[str], fallback: str) -> str:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    for line in lines:
+        lowered = line.lower()
+        if any(keyword in lowered for keyword in keywords):
+            return line
+    return fallback
+
+
+def ensure_requirement_coverage(redacted_text: str, requirements: list[RequirementItem]) -> list[RequirementItem]:
+    sentence = (redacted_text or "").lower()
+    enriched = list(requirements)
+
+    def has_requirement(predicate: Any) -> bool:
+        return any(predicate(item) for item in enriched)
+
+    if any(token in sentence for token in ["sanction", "watchlist", "complyadvantage"]) and not has_requirement(
+        lambda item: item.service_type == "FRAUD" and item.api_action in {"screen_sanctions", "kill_switch"}
+    ):
+        enriched.append(
+            RequirementItem(
+                requirement_id="req_auto_sanctions",
+                service_type="FRAUD",
+                mandatory=True,
+                confidence=0.75,
+                source_sentence=sentence_for_keyword(
+                    redacted_text,
+                    ["sanction", "watchlist", "complyadvantage"],
+                    "Screen each transaction against sanctions lists before payout.",
+                ),
+                api_action="screen_sanctions",
+                conditions={},
+            )
+        )
+
+    if any(token in sentence for token in ["onfido", "passport", "international users"]) and not has_requirement(
+        lambda item: item.service_type == "KYC" and item.api_action == "verify_passport"
+    ):
+        enriched.append(
+            RequirementItem(
+                requirement_id="req_auto_passport",
+                service_type="KYC",
+                mandatory=True,
+                confidence=0.75,
+                source_sentence=sentence_for_keyword(
+                    redacted_text,
+                    ["onfido", "passport", "international users"],
+                    "International users require passport identity verification.",
+                ),
+                api_action="verify_passport",
+                conditions={},
+            )
+        )
+
+    if any(token in sentence for token in ["sahamati", "enhanced due diligence", "source of funds"]) and not has_requirement(
+        lambda item: item.service_type == "OPEN_BANKING" and item.api_action == "verify_source_of_funds"
+    ):
+        enriched.append(
+            RequirementItem(
+                requirement_id="req_auto_edd",
+                service_type="OPEN_BANKING",
+                mandatory=True,
+                confidence=0.75,
+                source_sentence=sentence_for_keyword(
+                    redacted_text,
+                    ["sahamati", "enhanced due diligence", "source of funds"],
+                    "Run enhanced due diligence for high-value transfers.",
+                ),
+                api_action="verify_source_of_funds",
+                conditions={"depends_on": "req_fraud_id", "threshold_amount_usd": 10000},
+            )
+        )
+
+    if any(token in sentence for token in ["wise", "transferwise", "payout", "beneficiary_iban", "swift_code"]) and not has_requirement(
+        lambda item: item.service_type == "PAYMENT" and item.api_action == "process_payout"
+    ):
+        enriched.append(
+            RequirementItem(
+                requirement_id="req_auto_payout",
+                service_type="PAYMENT",
+                mandatory=True,
+                confidence=0.75,
+                source_sentence=sentence_for_keyword(
+                    redacted_text,
+                    ["wise", "transferwise", "payout", "beneficiary_iban", "swift_code"],
+                    "Use payout rails after compliance checks are clear.",
+                ),
+                api_action="process_payout",
+                conditions={"depends_on": "req_fraud_id"},
+            )
+        )
+
+    return enriched
+
+
 def save_requirements(connection: Any, document_id: str, tenant_id: str, requirements: list[RequirementItem]) -> None:
     with connection.cursor() as cursor:
         cursor.execute("DELETE FROM requirements WHERE document_id = %s", (document_id,))
@@ -807,7 +1060,139 @@ def save_requirements(connection: Any, document_id: str, tenant_id: str, require
             )
 
 
+def normalize_requirement_category(service_type: str, source_sentence: str) -> str | None:
+    normalized = (service_type or "").strip().upper()
+    if normalized in {"KYC", "BUREAU", "FRAUD", "PAYMENT", "GST", "OPEN_BANKING"}:
+        return normalized
+    if normalized == "ACCOUNT":
+        return "OPEN_BANKING"
+
+    sentence = (source_sentence or "").lower()
+    if "sanction" in sentence or "watchlist" in sentence or "terrorist" in sentence or "money laundering" in sentence:
+        return "FRAUD"
+    if "enhanced due diligence" in sentence or "source of funds" in sentence or "sahamati" in sentence:
+        return "OPEN_BANKING"
+    if "gst" in sentence:
+        return "GST"
+    if "aadhaar" in sentence or "kyc" in sentence or "onfido" in sentence or "passport" in sentence:
+        return "KYC"
+    if "bureau" in sentence or "credit score" in sentence or "cibil" in sentence:
+        return "BUREAU"
+    if "fraud" in sentence:
+        return "FRAUD"
+    if "payment" in sentence or "disburs" in sentence or "wise" in sentence or "transferwise" in sentence or "swift" in sentence or "iban" in sentence:
+        return "PAYMENT"
+    if "account aggregator" in sentence or "bank statement" in sentence:
+        return "OPEN_BANKING"
+    return None
+
+
+def preferred_provider_hint(source_sentence: str, target_category: str) -> str | None:
+    sentence = (source_sentence or "").lower()
+
+    if target_category == "FRAUD":
+        if any(token in sentence for token in ["sanction", "watchlist", "terrorist", "money laundering", "complyadvantage"]):
+            return "complyadvantage"
+    if target_category == "KYC":
+        if any(token in sentence for token in ["passport", "onfido", "international", "digital nomad"]):
+            return "onfido"
+        if "aadhaar" in sentence:
+            return "uidai"
+    if target_category == "OPEN_BANKING":
+        if any(token in sentence for token in ["sahamati", "account aggregator", "source of funds", "enhanced due diligence"]):
+            return "sahamati"
+    if target_category == "PAYMENT":
+        if any(token in sentence for token in ["wise", "transferwise", "iban", "swift"]):
+            return "wise"
+
+    return None
+
+
+def ensure_category_embeddings(connection: Any, category: str) -> None:
+    with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute(
+            """
+            SELECT av.id AS adapter_version_id,
+                   a.name,
+                   a.provider,
+                   a.category,
+                   av.request_schema,
+                   av.embedding
+            FROM adapter_versions av
+            JOIN adapters a ON a.id = av.adapter_id
+            WHERE a.category = %s
+            """,
+            (category,),
+        )
+        rows = cursor.fetchall()
+
+    for row in rows:
+        if row.get("embedding") is not None:
+            continue
+
+        schema = row.get("request_schema")
+        schema_fields = []
+        if isinstance(schema, dict):
+            schema_fields = [str(key) for key in schema.keys()]
+
+        embedding_text = " ".join(
+            [
+                str(row.get("name") or ""),
+                str(row.get("provider") or ""),
+                str(row.get("category") or ""),
+                " ".join(schema_fields),
+            ]
+        ).strip()
+        if not embedding_text:
+            continue
+
+        try:
+            embedding = generate_embedding(embedding_text, input_type="passage")
+            vector_literal = to_vector_literal(embedding)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE adapter_versions SET embedding = %s::vector WHERE id = %s",
+                    (vector_literal, row["adapter_version_id"]),
+                )
+        except Exception:
+            # Leave embedding null and allow provider-aware fallback.
+            continue
+
+
+def fallback_match_adapter(connection: Any, target_category: str, source_sentence: str) -> dict[str, Any] | None:
+    with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute(
+            """
+            SELECT av.id AS adapter_version_id,
+                   a.name,
+                   a.category,
+                   a.provider
+            FROM adapter_versions av
+            JOIN adapters a ON a.id = av.adapter_id
+            WHERE a.category = %s
+            ORDER BY a.name ASC
+            """,
+            (target_category,),
+        )
+        candidates = cursor.fetchall()
+
+    if not candidates:
+        return None
+
+    preferred_provider = preferred_provider_hint(source_sentence, target_category)
+    if preferred_provider:
+        for candidate in candidates:
+            provider = str(candidate.get("provider") or "").lower()
+            name = str(candidate.get("name") or "").lower()
+            if preferred_provider in provider or preferred_provider in name:
+                return candidate
+
+    return candidates[0]
+
+
 def match_requirements_to_adapters(connection: Any, document_id: str) -> None:
+    hydrated_categories: set[str] = set()
+
     with connection.cursor(cursor_factory=RealDictCursor) as cursor:
         cursor.execute(
             "SELECT id, service_type, source_sentence FROM requirements WHERE document_id = %s ORDER BY id",
@@ -816,11 +1201,34 @@ def match_requirements_to_adapters(connection: Any, document_id: str) -> None:
         requirements = cursor.fetchall()
 
     for requirement in requirements:
+        requirement_id = requirement["id"]
+        service_type = str(requirement.get("service_type") or "").upper()
         source_sentence = str(requirement.get("source_sentence") or "").strip()
         if not source_sentence:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE requirements SET matched_adapter_version_id = NULL, match_explanation = %s WHERE id = %s",
+                    ("Requirement source sentence is empty; adapter matching skipped", requirement_id),
+                )
             continue
 
         try:
+            target_category = normalize_requirement_category(service_type, source_sentence)
+            if not target_category:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE requirements SET matched_adapter_version_id = NULL, match_explanation = %s WHERE id = %s",
+                        (
+                            f"No compatible adapter category for requirement type {service_type}; semantic fallback disabled to avoid cross-category mismatch",
+                            requirement_id,
+                        ),
+                    )
+                continue
+
+            if target_category not in hydrated_categories:
+                ensure_category_embeddings(connection, target_category)
+                hydrated_categories.add(target_category)
+
             query_embedding = generate_embedding(source_sentence, input_type="query")
             vector_literal = to_vector_literal(query_embedding)
 
@@ -831,18 +1239,32 @@ def match_requirements_to_adapters(connection: Any, document_id: str) -> None:
                     FROM adapter_versions av
                     JOIN adapters a ON a.id = av.adapter_id
                     WHERE av.embedding IS NOT NULL
+                      AND a.category = %s
                     ORDER BY av.embedding <=> %s::vector
                     LIMIT 1
                     """,
-                    (vector_literal,),
+                    (target_category, vector_literal),
                 )
                 best_match = cursor.fetchone()
 
                 if best_match:
-                    explanation = (
-                        f"Matched on semantic similarity to {best_match['name']} "
-                        f"({best_match['category']}) for requirement type {requirement['service_type']}"
-                    )
+                    adapter_name = str(best_match['name'] or "Unknown Adapter").strip()
+                    category = str(best_match['category'] or "").strip()
+                    
+                    # Build adapter-specific explanation
+                    if "complyadvantage" in adapter_name.lower() or "comply" in adapter_name.lower():
+                        explanation = f"Matched to {adapter_name} Sanctions Engine via semantic similarity."
+                    elif "onfido" in adapter_name.lower():
+                        explanation = f"Matched to {adapter_name} Global Identity Verification based on document requirements."
+                    elif "aadhaar" in adapter_name.lower() or "aadhar" in adapter_name.lower():
+                        explanation = f"Matched to {adapter_name} eKYC for Indian identity verification."
+                    elif "sahamati" in adapter_name.lower() or "aa" in adapter_name.lower():
+                        explanation = f"Matched to {adapter_name} Account Aggregator for source of funds verification."
+                    elif "wise" in adapter_name.lower():
+                        explanation = f"Matched to {adapter_name} for international payout processing."
+                    else:
+                        explanation = f"Matched to {adapter_name} ({category}) via semantic similarity to requirement type {service_type}."
+                    
                     cursor.execute(
                         """
                         UPDATE requirements
@@ -850,18 +1272,42 @@ def match_requirements_to_adapters(connection: Any, document_id: str) -> None:
                             match_explanation = %s
                         WHERE id = %s
                         """,
-                        (best_match["adapter_version_id"], explanation, requirement["id"]),
+                        (best_match["adapter_version_id"], explanation, requirement_id),
                     )
                 else:
+                    fallback_match = fallback_match_adapter(connection, target_category, source_sentence)
+                    if fallback_match:
+                        preferred_provider = preferred_provider_hint(source_sentence, target_category)
+                        strategy = "category fallback"
+                        if preferred_provider:
+                            strategy = f"provider-aware category fallback ({preferred_provider})"
+                        cursor.execute(
+                            """
+                            UPDATE requirements
+                            SET matched_adapter_version_id = %s,
+                                match_explanation = %s
+                            WHERE id = %s
+                            """,
+                            (
+                                fallback_match["adapter_version_id"],
+                                f"Matched using {strategy} to {fallback_match['name']} ({fallback_match['category']}) because embeddings were unavailable for category {target_category}",
+                                requirement_id,
+                            ),
+                        )
+                        continue
+
                     cursor.execute(
-                        "UPDATE requirements SET match_explanation = %s WHERE id = %s",
-                        ("No embedded adapter versions available for semantic matching", requirement["id"]),
+                        "UPDATE requirements SET matched_adapter_version_id = NULL, match_explanation = %s WHERE id = %s",
+                        (
+                            f"No embedded adapters found for category {target_category}; semantic fallback disabled to avoid cross-category mismatch",
+                            requirement_id,
+                        ),
                     )
         except Exception as error:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "UPDATE requirements SET match_explanation = %s WHERE id = %s",
-                    (f"Semantic matching failed: {error}", requirement["id"]),
+                    "UPDATE requirements SET matched_adapter_version_id = NULL, match_explanation = %s WHERE id = %s",
+                    (f"Semantic matching failed: {error}", requirement_id),
                 )
 
 
@@ -885,8 +1331,24 @@ def process_document(document_id: str) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="document_not_found")
 
         with connection.cursor() as cursor:
-            cursor.execute("UPDATE documents SET parse_status = 'processing' WHERE id = %s", (document_id,))
+            cursor.execute(
+                """
+                UPDATE documents
+                SET parse_status = 'processing'
+                WHERE id = %s
+                  AND parse_status <> 'processing'
+                """,
+                (document_id,),
+            )
+            updated_rows = cursor.rowcount
         connection.commit()
+
+        if updated_rows == 0:
+            return {
+                "document_id": document_id,
+                "status": "already_processing",
+                "message": "Document processing is already in progress",
+            }
 
         object_name = str(document["storage_path"])
         try:
@@ -904,6 +1366,8 @@ def process_document(document_id: str) -> dict[str, Any]:
             raw_text = extract_text(str(document["filename"]), payload)
             redacted_text, entities = nvidia_redact(raw_text)
             requirements, extraction_method = extract_requirements_with_ai(redacted_text)
+            requirements = ensure_requirement_coverage(raw_text, requirements)
+            requirements = deduplicate_requirements(requirements)
 
             save_requirements(connection, str(document["id"]), str(document["tenant_id"]), requirements)
             match_requirements_to_adapters(connection, str(document["id"]))

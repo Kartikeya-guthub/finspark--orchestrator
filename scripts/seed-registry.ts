@@ -46,6 +46,18 @@ const goldenAdapters: GoldenAdapter[] = [
     },
   },
   {
+    name: "Wise CrossBorder Payout",
+    category: "PAYMENT",
+    provider: "Wise",
+    apiVersion: "v2.0",
+    requestSchema: {
+      beneficiary_iban: "string",
+      swift_code: "string",
+      amount: "number",
+      currency: "string",
+    },
+  },
+  {
     name: "FraudShield",
     category: "FRAUD",
     provider: "internal",
@@ -53,6 +65,40 @@ const goldenAdapters: GoldenAdapter[] = [
     requestSchema: {
       ip: "string",
       phone: "string",
+    },
+  },
+  {
+    name: "ComplyAdvantage Sanctions",
+    category: "FRAUD",
+    provider: "ComplyAdvantage",
+    apiVersion: "v1.0",
+    requestSchema: {
+      sender_name: "string",
+      receiver_name: "string",
+      screening_type: "string",
+    },
+  },
+  {
+    name: "Onfido Global Identity",
+    category: "KYC",
+    provider: "Onfido",
+    apiVersion: "v4.2",
+    requestSchema: {
+      user_citizenship: "string",
+      document_type: "string",
+      passport_photo_ref: "string",
+    },
+  },
+  {
+    name: "Sahamati AA SourceOfFunds",
+    category: "OPEN_BANKING",
+    provider: "Sahamati",
+    apiVersion: "v1.0",
+    requestSchema: {
+      transfer_amount: "number",
+      currency: "string",
+      consent_handle: "string",
+      account_ref: "string",
     },
   },
 ];

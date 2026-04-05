@@ -1,0 +1,48 @@
+Project: Sunrise SME Working Capital - ACCEPTED SAMPLE
+Document Type: Business Requirement Document (BRD)
+Version: 1.0
+Owner: Lending Operations
+
+1. Objective
+Build an automated integration flow for SME working-capital onboarding and disbursal.
+
+2. Business Flow
+Step A: KYC and Business Verification (parallel)
+- Verify promoter identity via UIDAI Aadhaar eKYC using fields: director_name, director_aadhaar, director_phone.
+- Verify business GST via GSTN using fields: biz_gstin, legal_entity_name.
+- Both checks are mandatory and must complete before moving forward.
+
+Step B: Financial Assessment
+- Fetch 12 months of bank statements through Account Aggregator (AA) using consent_flag and customer_account_ref.
+- If AA fetch fails, fallback to bureau pull (CIBIL) using applicant_pan and applicant_name.
+
+Step C: Fraud Screening
+- Run fraud check using FraudShield with business_ip and director_phone.
+- Fraud status must be clear to proceed.
+
+Step D: Payment and Disbursal
+- Collect processing fee through Stripe using amount and payment_reference.
+- Disburse approved loan amount through Razorpay using business_account_no and ifsc_code.
+
+3. Mandatory Services
+- KYC: mandatory
+- GST verification: mandatory
+- Account Aggregator fetch or Bureau fallback: mandatory
+- Fraud check: mandatory
+- Payment + disbursal: mandatory
+
+4. Required Data Fields
+biz_gstin, legal_entity_name, director_name, director_aadhaar, director_phone,
+consent_flag, customer_account_ref, applicant_pan, applicant_name,
+business_ip, loan_request_amt, business_account_no, ifsc_code, payment_reference.
+
+5. Security and Compliance
+- tenant_id must be passed in all workflow operations.
+- consent_flag must be true before AA fetch.
+- All integration events must be audit logged.
+
+6. Acceptance Criteria
+- Config is generated with DAG showing parallel KYC + GST.
+- AA path is primary with bureau as conditional fallback.
+- Governance approval can be completed without policy violations.
+- Simulation trace completes end-to-end with no failed mandatory nodes.

@@ -200,14 +200,6 @@ app.get("/api/tenants/bootstrap", async (_request, reply) => {
     );
 
     if (existing.rowCount && existing.rows[0]) {
-      await writeAuditEvent(
-        existing.rows[0].id,
-        "tenant",
-        existing.rows[0].id,
-        "tenant_bootstrap_existing",
-        "api_service",
-        { name: existing.rows[0].name, status: existing.rows[0].status },
-      );
       return reply.send({ tenant_id: existing.rows[0].id, name: existing.rows[0].name, status: existing.rows[0].status });
     }
 
@@ -291,8 +283,23 @@ app.post("/api/documents/upload", async (request, reply) => {
     );
 
     if (existing.rowCount && existing.rows[0]) {
+      const existingObjectPath = String(existing.rows[0].storage_path || `tenants/${tenantId}/${fingerprint}${ext}`);
+      let objectRestored = false;
+      try {
+        await minio.statObject(documentsBucket, existingObjectPath);
+      } catch {
+        await minio.putObject(documentsBucket, existingObjectPath, buffer, buffer.length, {
+          "Content-Type": file.mimetype || "application/octet-stream",
+        });
+        objectRestored = true;
+      }
+
       const existingStatus = String(existing.rows[0].parse_status);
-      if (existingStatus !== "config_generated" && existingStatus !== "processing") {
+      const shouldRetrigger = existingStatus !== "config_generated" && existingStatus !== "processing";
+
+      if (shouldRetrigger) {
+        await pool.query("UPDATE documents SET parse_status = 'processing' WHERE id = $1", [String(existing.rows[0].id)]);
+        existing.rows[0].parse_status = "processing";
         triggerDocumentProcessing(String(existing.rows[0].id));
       }
 
@@ -306,7 +313,8 @@ app.post("/api/documents/upload", async (request, reply) => {
           filename: String(existing.rows[0].filename),
           fingerprint,
           parse_status: existingStatus,
-          processing_retriggered: existingStatus !== "config_generated" && existingStatus !== "processing",
+          object_restored: objectRestored,
+          processing_retriggered: shouldRetrigger,
         },
       );
       return reply.send({ idempotent: true, document: existing.rows[0] });

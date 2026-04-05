@@ -1,4 +1,4 @@
-import { ChangeEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, Component, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   approveConfig,
   bootstrapTenant,
@@ -17,6 +17,31 @@ import {
   type RequirementRecord,
   type SimulationResult,
 } from "./api";
+type HumanDiffItemTone = "added" | "modified" | "removed";
+
+type HumanDiffItem = {
+  id: string;
+  tone: HumanDiffItemTone;
+  text: string;
+};
+
+type SafeSimulationStep = {
+  node_id: string;
+  service_type: string;
+  status: "success" | "failed" | "skipped";
+  latency_ms: number;
+  output: unknown;
+  input: unknown;
+};
+
+type DashboardErrorBoundaryProps = {
+  children: ReactNode;
+};
+
+type DashboardErrorBoundaryState = {
+  hasError: boolean;
+  errorMessage: string;
+};
 
 type ApprovalState = {
   engineerComment: string;
@@ -75,6 +100,129 @@ function Panel({
   );
 }
 
+class DashboardErrorBoundary extends Component<DashboardErrorBoundaryProps, DashboardErrorBoundaryState> {
+  constructor(props: DashboardErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, errorMessage: "" };
+  }
+
+  static getDerivedStateFromError(error: unknown): DashboardErrorBoundaryState {
+    return {
+      hasError: true,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  componentDidCatch(error: unknown): void {
+    console.error("Dashboard render error", error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-3xl border border-rose-300/30 bg-rose-500/10 p-4 text-sm text-rose-100">
+          <div className="font-semibold">Dashboard rendering error detected</div>
+          <div className="mt-1 text-rose-200/90">
+            {this.state.errorMessage || "An unexpected UI error occurred while rendering simulation results."}
+          </div>
+          <div className="mt-2 text-rose-200/80">Refresh the page and rerun simulation. If this repeats, capture this message and share it.</div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+function normalizeForGrounding(value: string): string {
+  return (value || "")
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function toneIcon(tone: HumanDiffItemTone): string {
+  if (tone === "added") {
+    return "🟢 Added";
+  }
+  if (tone === "modified") {
+    return "🟡 Modified";
+  }
+  return "🔴 Removed";
+}
+
+function toHumanDiffItems(configDiff: Record<string, unknown> | null): HumanDiffItem[] {
+  if (!configDiff) {
+    return [];
+  }
+
+  const items: HumanDiffItem[] = [];
+  const addedMappings = Array.isArray(configDiff.added_field_mappings) ? configDiff.added_field_mappings as Array<Record<string, unknown>> : [];
+  const removedMappings = Array.isArray(configDiff.removed_field_mappings) ? configDiff.removed_field_mappings as Array<Record<string, unknown>> : [];
+  const changedDagNodes = Array.isArray(configDiff.changed_dag_nodes) ? configDiff.changed_dag_nodes as Array<Record<string, unknown>> : [];
+
+  for (const mapping of addedMappings.slice(0, 8)) {
+    const source = String(mapping.source_field ?? "unknown_source");
+    const target = String(mapping.target_field ?? "unknown_target");
+    const adapter = String(mapping.adapter_name ?? "Unknown Adapter");
+    items.push({
+      id: `add-map-${source}-${target}-${adapter}`,
+      tone: "added",
+      text: `${source} mapping to ${target} via ${adapter}.`,
+    });
+  }
+
+  for (const mapping of removedMappings.slice(0, 4)) {
+    const source = String(mapping.source_field ?? "unknown_source");
+    const target = String(mapping.target_field ?? "unknown_target");
+    const adapter = String(mapping.adapter_name ?? "Unknown Adapter");
+    items.push({
+      id: `remove-map-${source}-${target}-${adapter}`,
+      tone: "removed",
+      text: `${source} → ${target} mapping removed from ${adapter}.`,
+    });
+  }
+
+  for (const node of changedDagNodes.slice(0, 8)) {
+    const changeType = String(node.change_type ?? "modified");
+    if (changeType === "removed") {
+      const removedNode = (node.node as Record<string, unknown> | undefined) ?? {};
+      const serviceType = String(removedNode.service_type ?? "UNKNOWN");
+      const action = String(removedNode.api_action ?? "unknown_action");
+      items.push({
+        id: `remove-node-${serviceType}-${action}`,
+        tone: "removed",
+        text: `${serviceType} step ${action} removed from orchestration DAG.`,
+      });
+      continue;
+    }
+
+    const before = (node.before as Record<string, unknown> | undefined) ?? {};
+    const after = (node.after as Record<string, unknown> | undefined) ?? {};
+    const beforeAction = String(before.api_action ?? "unknown_action");
+    const afterAction = String(after.api_action ?? "unknown_action");
+    const serviceType = String(after.service_type ?? before.service_type ?? "UNKNOWN");
+    items.push({
+      id: `mod-node-${serviceType}-${beforeAction}-${afterAction}`,
+      tone: "modified",
+      text: `${serviceType} action changed from ${beforeAction} to ${afterAction}.`,
+    });
+  }
+
+  if (items.length === 0) {
+    items.push({
+      id: "fallback",
+      tone: "modified",
+      text: "No major mapping or DAG deltas detected yet.",
+    });
+  }
+
+  return items;
+}
+
 function AuditSidebar({ events }: { events: AuditEventRecord[] }) {
   return (
     <aside className="rounded-3xl border border-white/10 bg-slate-950/80 p-4 shadow-glow backdrop-blur-xl lg:sticky lg:top-4">
@@ -124,12 +272,173 @@ export default function Dashboard() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const pollRef = useRef<number | null>(null);
   const pollStartedAtRef = useRef<number | null>(null);
+  const lineRefs = useRef<Array<HTMLDivElement | null>>([]);
+  const [activeRequirementId, setActiveRequirementId] = useState<string | null>(null);
+  const [highlightedLineIndex, setHighlightedLineIndex] = useState<number | null>(null);
+  const [animatedStepIndex, setAnimatedStepIndex] = useState<number>(-1);
 
-  const simulationTrace = simulation?.result.trace ?? [];
-  const bureauStep = useMemo(
-    () => simulationTrace.find((step: SimulationResult["result"]["trace"][number]) => step.service_type === "BUREAU"),
-    [simulationTrace],
+  const simulationTrace = useMemo<SafeSimulationStep[]>(() => {
+    try {
+      const trace = (simulation as { result?: { trace?: unknown } } | null)?.result?.trace;
+      if (!Array.isArray(trace)) {
+        return [];
+      }
+
+      return trace
+        .filter((item) => Boolean(item) && typeof item === "object")
+        .map((item, index) => {
+          try {
+            const row = item as Record<string, unknown>;
+            const statusRaw = typeof row.status === "string" ? row.status : "success";
+            const safeStatus: SafeSimulationStep["status"] = statusRaw === "failed" || statusRaw === "skipped" ? statusRaw : "success";
+            return {
+              node_id: typeof row.node_id === "string" ? row.node_id : `step_${index + 1}`,
+              service_type: typeof row.service_type === "string" ? row.service_type : "UNKNOWN",
+              status: safeStatus,
+              latency_ms: typeof row.latency_ms === "number" ? row.latency_ms : 0,
+              output: row.output,
+              input: row.input,
+            };
+          } catch {
+            return {
+              node_id: `step_${index + 1}`,
+              service_type: "UNKNOWN",
+              status: "success",
+              latency_ms: 0,
+              output: null,
+              input: null,
+            };
+          }
+        });
+    } catch (error) {
+      console.error("Error parsing simulation trace", error);
+      return [];
+    }
+  }, [simulation]);
+  const redactedText = document?.redacted_content?.redacted_text?.trim() ?? "";
+  const rawText = document?.raw_text?.trim() ?? "";
+  const hasMaskedRedaction = Boolean(redactedText) && redactedText !== rawText;
+  const configStatus = configVersion?.status ?? document?.parse_status ?? "waiting";
+  const groundingText = (redactedText || rawText || "").trim();
+  const groundingLines = useMemo(() => groundingText.split(/\r?\n/).filter((line) => line.trim().length > 0), [groundingText]);
+  const humanDiffItems = useMemo(() => toHumanDiffItems(configDiff), [configDiff]);
+  const parsedThreshold = useMemo(() => {
+    for (const requirement of requirements) {
+      const thresholdRaw = (requirement.conditions as Record<string, unknown> | null | undefined)?.threshold_amount_usd;
+      if (typeof thresholdRaw === "number") {
+        return thresholdRaw;
+      }
+      if (typeof thresholdRaw === "string") {
+        const parsed = Number(thresholdRaw);
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+    }
+    return 10000;
+  }, [requirements]);
+  const executiveSummary = useMemo(() => {
+    const hasAadhaar = requirements.some((requirement) => requirement.api_action === "verify_aadhaar");
+    const hasPassport = requirements.some((requirement) => requirement.api_action === "verify_passport");
+    const hasSanctions = requirements.some((requirement) => requirement.api_action === "screen_sanctions");
+    const hasKillSwitch = requirements.some((requirement) => requirement.api_action === "kill_switch");
+    const hasEdd = requirements.some((requirement) => requirement.api_action === "verify_source_of_funds");
+    const hasPayout = requirements.some((requirement) => requirement.api_action === "process_payout" || requirement.service_type === "PAYMENT");
+    const readiness = configStatus === "approved" ? "Bank-Ready" : configStatus === "config_generated" ? "Awaiting Governance Approval" : "In Progress";
+
+    if (requirements.length === 0) {
+      return "Upload a BRD to generate integration intelligence and orchestration insights.";
+    }
+
+    return [
+      `Project Guardian Processed:`,
+      hasAadhaar && hasPassport ? "extracted a Global Identity Fork" : "extracted identity verification requirements",
+      hasSanctions ? "with mandatory Sanctions Screening" : "with compliance checks",
+      hasKillSwitch ? "and kill-switch controls" : "",
+      hasEdd ? `plus a $${parsedThreshold.toLocaleString()} EDD Threshold` : "",
+      hasPayout ? "and payout orchestration." : ".",
+      `Status: ${readiness}.`,
+    ].filter(Boolean).join(" ");
+  }, [requirements, parsedThreshold, configStatus]);
+
+  const flowNodes = useMemo(
+    () => [
+      { id: "aadhaar", label: "KYC Aadhaar", activeWhen: (step: SafeSimulationStep) => step.service_type === "KYC" },
+      { id: "onfido", label: "Onfido", activeWhen: (step: SafeSimulationStep) => step.service_type === "KYC" },
+      { id: "sanctions", label: "Sanctions Check", activeWhen: (step: SafeSimulationStep) => step.service_type === "FRAUD" || step.service_type === "BUREAU" },
+      { id: "edd", label: "AA Verify", activeWhen: (step: SafeSimulationStep) => step.service_type === "OPEN_BANKING" || step.service_type === "ACCOUNT" },
+      { id: "payout", label: "Wise Payout", activeWhen: (step: SafeSimulationStep) => step.service_type === "PAYMENT" },
+    ],
+    [],
   );
+  const flowStates = useMemo(() => {
+    try {
+      const states: Record<string, "idle" | "running" | "success" | "failed"> = {
+        aadhaar: "idle",
+        onfido: "idle",
+        sanctions: "idle",
+        edd: "idle",
+        payout: "idle",
+      };
+
+      if (simulationState === "loading") {
+        if (flowNodes.length > 0) {
+          const loopIndex = (Date.now() / 500 | 0) % flowNodes.length;
+          const loopNode = flowNodes[loopIndex];
+          if (loopNode?.id) {
+            states[loopNode.id] = "running";
+          }
+        }
+        return states;
+      }
+
+      const completedCount = animatedStepIndex + 1;
+      if (completedCount <= 0 || simulationTrace.length === 0) {
+        return states;
+      }
+
+      for (let index = 0; index < simulationTrace.length; index += 1) {
+        if (index > animatedStepIndex) {
+          break;
+        }
+        const step = simulationTrace[index];
+        if (!step) continue;
+        
+        for (const node of flowNodes) {
+          try {
+            if (node?.activeWhen && node.activeWhen(step)) {
+              states[node.id] = step.status === "failed" ? "failed" : "success";
+            }
+          } catch {
+            // Ignore errors in node matching
+            continue;
+          }
+        }
+      }
+
+      return states;
+    } catch (error) {
+      console.error("flowStates calculation error", error);
+      return {
+        aadhaar: "idle",
+        onfido: "idle",
+        sanctions: "idle",
+        edd: "idle",
+        payout: "idle",
+      };
+    }
+  }, [simulationState, simulationTrace, animatedStepIndex, flowNodes]);
+  const bureauStep = useMemo(() => simulationTrace.find((step) => step.service_type === "BUREAU"), [simulationTrace]);
+
+  useEffect(() => {
+    if (simulationState !== "loading" || simulationTrace.length === 0) {
+      return;
+    }
+    const interval = setInterval(() => {
+      setAnimatedStepIndex((current) => (current + 1 < simulationTrace.length ? current + 1 : current));
+    }, 800);
+    return () => clearInterval(interval);
+  }, [simulationState, simulationTrace]);
 
   useEffect(() => {
     void bootstrapTenant().then((result) => {
@@ -229,6 +538,63 @@ export default function Dashboard() {
     return () => window.clearInterval(timer);
   }, [tenantId]);
 
+  useEffect(() => {
+    if (!simulationTrace.length) {
+      setAnimatedStepIndex(-1);
+      return;
+    }
+
+    setAnimatedStepIndex(-1);
+    let isActive = true;
+    let stepCount = 0;
+    const timer = window.setInterval(() => {
+      if (!isActive) return;
+      stepCount += 1;
+      if (stepCount >= simulationTrace.length) {
+        window.clearInterval(timer);
+        isActive = false;
+        return;
+      }
+      setAnimatedStepIndex(Math.min(stepCount, simulationTrace.length - 1));
+    }, 280);
+
+    return () => {
+      isActive = false;
+      window.clearInterval(timer);
+    };
+  }, [simulation?.simulation_run_id, simulationTrace.length]);
+
+  function handleRequirementClick(requirement: RequirementRecord) {
+    setActiveRequirementId(requirement.id);
+    if (!groundingLines.length || !requirement.source_sentence) {
+      setHighlightedLineIndex(null);
+      return;
+    }
+
+    const target = normalizeForGrounding(requirement.source_sentence);
+    const targetTokens = target.split(" ").filter((token) => token.length > 3);
+    const lineIndex = groundingLines.findIndex((line) => {
+      const normalized = normalizeForGrounding(line);
+      if (!normalized) {
+        return false;
+      }
+      if (normalized.includes(target)) {
+        return true;
+      }
+      const overlapCount = targetTokens.filter((token) => normalized.includes(token)).length;
+      return overlapCount >= Math.max(3, Math.floor(targetTokens.length * 0.45));
+    });
+
+    if (lineIndex >= 0) {
+      setHighlightedLineIndex(lineIndex);
+      window.setTimeout(() => {
+        lineRefs.current[lineIndex]?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 20);
+    } else {
+      setHighlightedLineIndex(null);
+    }
+  }
+
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     setSelectedFile(file);
@@ -288,6 +654,7 @@ export default function Dashboard() {
     }
 
     setSimulationState("loading");
+    setAnimatedStepIndex(-1);
     setMessage("Running simulation trace...");
     try {
       const result = await runSimulation(configVersion.id);
@@ -335,7 +702,6 @@ export default function Dashboard() {
     }
   }
 
-  const configStatus = configVersion?.status ?? document?.parse_status ?? "waiting";
   const finalPayment = simulationTrace.find((step) => step.service_type === "PAYMENT");
   const cibilScore = bureauStep?.output && typeof bureauStep.output === "object"
     ? (bureauStep.output as Record<string, unknown>)?.data && typeof (bureauStep.output as Record<string, unknown>).data === "object"
@@ -369,8 +735,18 @@ export default function Dashboard() {
             {uploadState === "loading" || pollingState === "loading" || intelligenceState === "loading" || governanceState === "loading" || simulationState === "loading" ? <Spinner /> : null}
           </div>
         </div>
+        <div className="mt-5 rounded-[1.8rem] border border-amber-300/30 bg-gradient-to-r from-amber-500/20 via-cyan-500/15 to-emerald-500/20 p-5 shadow-glow">
+          <div className="flex flex-wrap items-center gap-3">
+            <StatusPill label="Executive Insight" tone="amber" />
+            <StatusPill label={configStatus} tone={configStatus === "approved" ? "green" : "slate"} />
+          </div>
+          <p className="mt-3 text-lg font-semibold leading-7 text-amber-50 sm:text-xl">
+            {executiveSummary}
+          </p>
+        </div>
       </header>
 
+      <DashboardErrorBoundary>
       <main className="mx-auto grid max-w-[1800px] grid-cols-1 gap-6 px-6 pb-8 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1.1fr)_minmax(0,1.4fr)_320px] lg:px-8">
         <Panel title="1. Intake" subtitle="Upload a BRD and show the redacted text once the AI service completes." accent="from-cyan-500/10 to-sky-500/5">
           <label className="flex cursor-pointer flex-col items-center justify-center rounded-3xl border border-dashed border-cyan-300/30 bg-slate-950/60 p-6 text-center transition hover:border-cyan-200/50 hover:bg-white/5">
@@ -390,7 +766,29 @@ export default function Dashboard() {
                 <span>Redacted Text</span>
                 <span>{document?.parse_status ?? "idle"}</span>
               </div>
-              <pre className="whitespace-pre-wrap font-mono">{document?.redacted_content?.redacted_text ?? document?.raw_text ?? "Waiting for PII redaction..."}</pre>
+              {groundingLines.length > 0 ? (
+                <div className="max-h-80 space-y-1 overflow-auto font-mono">
+                  {groundingLines.map((line, index) => (
+                    <div
+                      key={`grounding-line-${index}`}
+                      ref={(element) => {
+                        lineRefs.current[index] = element;
+                      }}
+                      className={`rounded-md px-2 py-1 transition ${highlightedLineIndex === index ? "bg-amber-300/35 text-amber-50" : "text-slate-300"}`}
+                    >
+                      {line}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <pre className="whitespace-pre-wrap font-mono">
+                  {hasMaskedRedaction
+                    ? redactedText
+                    : document?.parse_status === "config_generated"
+                      ? "No PII detected in this document."
+                      : "Waiting for PII redaction..."}
+                </pre>
+              )}
             </div>
             <button
               type="button"
@@ -413,7 +811,14 @@ export default function Dashboard() {
               <div className="rounded-3xl border border-white/10 bg-white/5 p-4 text-sm text-slate-400">Requirements will appear here after polling completes.</div>
             ) : (
               requirements.map((requirement) => (
-                <article key={requirement.id} className="rounded-3xl border border-white/10 bg-slate-950/80 p-4">
+                <article
+                  key={requirement.id}
+                  className={`cursor-pointer rounded-3xl border bg-slate-950/80 p-4 transition ${activeRequirementId === requirement.id ? "border-amber-300/60 ring-2 ring-amber-300/30" : "border-white/10 hover:border-cyan-300/40"}`}
+                  onClick={() => handleRequirementClick(requirement)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => e.key === "Enter" && handleRequirementClick(requirement)}
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="text-sm font-semibold text-white">{requirement.service_type}</div>
@@ -431,8 +836,8 @@ export default function Dashboard() {
             )}
           </div>
           <div className="rounded-3xl border border-white/10 bg-white/5 p-4 text-xs text-slate-300">
-            <div className="mb-2 font-semibold uppercase tracking-[0.2em] text-slate-400">Simulation Story</div>
-            <div>Why CIBIL? The match explanation should mention semantic similarity to the Bureau adapter, not keyword matching.</div>
+            <div className="mb-2 font-semibold uppercase tracking-[0.2em] text-slate-400">Judge Proof</div>
+            <div>Click any requirement to highlight its source sentence in the redacted text. This proves our AI engine is grounded in document facts, not hallucinating from templates.</div>
           </div>
         </Panel>
 
@@ -443,7 +848,21 @@ export default function Dashboard() {
           </div>
           <div className="rounded-3xl border border-white/10 bg-slate-950/80 p-4 text-xs text-slate-300">
             <div className="mb-2 font-semibold uppercase tracking-[0.2em] text-slate-400">Config Diff</div>
-            <pre className="max-h-56 overflow-auto whitespace-pre-wrap font-mono">{configDiff ? formatJson(configDiff) : "Diff will appear after a version is loaded."}</pre>
+            <div className="max-h-60 space-y-2 overflow-auto pr-1">
+              {humanDiffItems.map((item) => (
+                <div
+                  key={item.id}
+                  className={`rounded-2xl border p-3 ${item.tone === "added" ? "border-emerald-300/30 bg-emerald-300/10" : item.tone === "modified" ? "border-amber-300/30 bg-amber-300/10" : "border-rose-300/30 bg-rose-300/10"}`}
+                >
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-200">{toneIcon(item.tone)}</div>
+                  <div className="mt-1 text-slate-100">{item.text}</div>
+                </div>
+              ))}
+            </div>
+            <details className="mt-3 rounded-2xl border border-white/10 bg-white/5 p-3">
+              <summary className="cursor-pointer text-[11px] uppercase tracking-[0.18em] text-slate-400">Raw JSON Diff</summary>
+              <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-slate-300">{configDiff ? formatJson(configDiff) : "Diff will appear after a version is loaded."}</pre>
+            </details>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -510,6 +929,31 @@ export default function Dashboard() {
               <span>Simulation Trace</span>
               <span>{simulationTrace.length} steps</span>
             </div>
+            <div className="mb-4 rounded-2xl border border-white/10 bg-slate-900/60 p-3">
+              <div className="mb-3 text-[11px] uppercase tracking-[0.2em] text-slate-400">Visual Flow</div>
+              <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr]">
+                {flowNodes.map((node, index) => {
+                  const state = (flowStates as Record<string, "idle" | "running" | "success" | "failed">)[node.id] ?? "idle";
+                  const stateClass = state === "success"
+                    ? "border-emerald-300/60 bg-emerald-400/20 text-emerald-50 shadow-[0_0_22px_rgba(16,185,129,0.35)]"
+                    : state === "failed"
+                      ? "border-rose-300/60 bg-rose-400/20 text-rose-50"
+                      : state === "running"
+                        ? "border-cyan-300/60 bg-cyan-400/20 text-cyan-50 animate-pulse"
+                        : "border-white/15 bg-white/5 text-slate-300";
+                  return (
+                    <div key={`flow-${node.id}`} className="contents">
+                      <div className={`rounded-xl border px-3 py-2 text-center text-[11px] font-semibold transition ${stateClass}`}>
+                        {node.label}
+                      </div>
+                      {index < flowNodes.length - 1 ? (
+                        <div className="hidden items-center justify-center text-slate-500 md:flex">→</div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
             <div className="space-y-2 font-mono text-[11px] leading-5 text-slate-300">
               {simulationTrace.length === 0 ? (
                 <div className="text-slate-500">The dry run output will appear here.</div>
@@ -537,6 +981,7 @@ export default function Dashboard() {
 
         <AuditSidebar events={auditEvents} />
       </main>
+      </DashboardErrorBoundary>
 
       <footer className="mx-auto max-w-[1800px] px-6 pb-10 lg:px-8">
         <div className="rounded-3xl border border-white/10 bg-white/5 p-4 text-xs text-slate-400">

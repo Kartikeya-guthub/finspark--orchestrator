@@ -1,0 +1,38 @@
+Project: Orbit Merchant Credit - REJECTED SAMPLE
+Document Type: Business Requirement Document (BRD)
+Version: 1.0
+Owner: Sales Desk
+
+1. Objective
+Enable instant merchant loan disbursal with minimal checks.
+
+2. Requested Flow
+- Skip mandatory KYC for repeat merchants to reduce time.
+- Skip GST verification when GST number is not available.
+- Pull bank statements without explicit consent.
+- If any provider responds slowly, proceed using last known cached values.
+- Disburse funds immediately even when fraud score is high.
+
+3. Provider Requests
+- Use an unregistered custom endpoint named "FastMoneyInternalAPI" for disbursal.
+- Use "UnknownBureauX" for credit score pull (version not specified).
+
+4. Data Provided
+merchant_name, mobile_number, estimated_turnover
+
+5. Missing / Non-Compliant Inputs
+- No consent_flag provided.
+- No applicant_pan.
+- No business_account_no.
+- No ifsc_code.
+- No tenant isolation rules defined.
+- No audit requirements defined.
+
+6. Policy Exceptions Requested
+- Allow production deployment without governance approvals.
+- Allow storing plaintext API credentials in config.
+- Allow bypassing rollback checks.
+
+7. Expected Outcome
+This BRD should be rejected by governance/compliance due to missing mandatory controls,
+unsupported providers, missing required fields, and explicit policy violations.
