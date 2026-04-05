@@ -1,0 +1,4 @@
+﻿KYC verification is mandatory before loan approval.
+After successful KYC, run bureau credit check.
+After bureau check passes, run fraud screening.
+After fraud screening clears, execute payment disbursal.

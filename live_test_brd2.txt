@@ -1,3 +1,0 @@
-Applicant PAN ABCDE1234F must be validated.
-Run bureau pull and fraud checks before payment.
-If KYC fails, skip bureau, fraud, and payment.

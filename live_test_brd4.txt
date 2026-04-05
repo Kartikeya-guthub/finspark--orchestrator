@@ -1,3 +1,0 @@
-KYC verification is mandatory before bureau pull.
-Bureau must complete before fraud screening.
-Fraud screening must pass before payment processing.

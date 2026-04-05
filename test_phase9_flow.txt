@@ -1,0 +1,4 @@
+﻿KYC must be completed first.
+After KYC, run a bureau creditworthiness check.
+After bureau, run fraud checks.
+After fraud, disburse payment.

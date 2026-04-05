@@ -230,7 +230,9 @@ The repository ships with [`.env.example`](.env.example) as the canonical starti
 | `AI_SERVICE_PORT` | AI service port |
 | `SIMULATOR_PORT` | Simulator port |
 | `AI_SERVICE_URL` | URL used by the API and runners to reach the AI service |
-| `NVIDIA_API_KEY` | NVIDIA integration key, optional in local dev |
+| `GLINER_API_KEY` | GLiNER integration key, optional in local dev |
+| `GLINER_BASE_URL` | GLiNER/OpenAI-compatible API base URL |
+| `GLINER_MODEL` | GLiNER PII model name |
 | `NVIDIA_OCR_ENDPOINT` | OCR endpoint |
 | `NVIDIA_CHAT_ENDPOINT` | Chat/completions endpoint |
 | `NVIDIA_GLINER_MODEL` | PII model name |
@@ -385,7 +387,7 @@ When changing behavior, prefer fixing the pipeline where the data is created rat
 
 ### AI Processing Returns Incomplete Data
 
-- Check `NVIDIA_API_KEY` and model variables if the external path is expected.
+- Check `GLINER_API_KEY` and model variables if the external path is expected.
 - Review the fallback logic in the AI service pipeline modules.
 - Confirm the document content was uploaded successfully and has not been blocked by safety logic.
 

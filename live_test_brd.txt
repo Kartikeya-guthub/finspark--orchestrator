@@ -1,3 +1,0 @@
-Loan policy requires bureau, kyc, and fraud checks.
-Use CIBIL score and PAN validation.
-If KYC fails, downstream payment and disbursal must be skipped.

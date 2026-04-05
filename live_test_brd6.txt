@@ -1,3 +1,0 @@
-KYC verification must pass before any bureau pull. run=20260404222333
-Bureau check must finish before fraud screening.
-Fraud screening must complete before payment disbursal.

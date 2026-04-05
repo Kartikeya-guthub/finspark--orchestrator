@@ -1,3 +1,0 @@
-Customer Aadhaar 1234 5678 9012 and PAN ABCDE1234F must be masked.
-System requires KYC, bureau check, and fraud screening.
-If KYC fails then bureau and payment must be skipped.

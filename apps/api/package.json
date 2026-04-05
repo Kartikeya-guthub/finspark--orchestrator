@@ -3,20 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js"
+    "dev": "npx tsx index.ts"
   },
   "dependencies": {
-    "@fastify/multipart": "^9.0.3",
+    "@fastify/cors": "^11.2.0",
+    "@fastify/multipart": "^9.4.0",
     "bullmq": "^5.58.5",
     "dotenv": "^17.2.2",
     "fastify": "^5.0.0",
     "ioredis": "^5.7.0",
     "jsonwebtoken": "^9.0.2",
-    "minio": "^8.0.5",
+    "minio": "^8.0.7",
     "pg": "^8.16.3"
   },
   "devDependencies": {
